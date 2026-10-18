@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Craftenstein 3D — HTML5</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; overflow:hidden;
+    user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;
+    touch-action:none; }
+html, body { width:100%; height:100%; background:#000;
+    font-family:'Courier New',monospace; color:#fff;
+    position:fixed; top:0; left:0; }
+#wrap { position:fixed; top:0; left:0; width:100vw; height:100vh;
+    display:flex; align-items:center; justify-content:center;
+    background:#000; overflow:hidden; }
+#game { display:block; background:#000;
+    image-rendering:pixelated; image-rendering:crisp-edges; }
+#start { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    padding:18px 36px; font:bold 22px 'Courier New',monospace;
+    background:#228B22; color:#fff; border:3px solid #00FF00;
+    border-radius:8px; z-index:100; cursor:pointer; }
+#start:active { background:#00FF00; }
+#btnFs { position:fixed; top:10px; right:10px;
+    width:44px; height:44px; background:rgba(0,255,0,0.4);
+    border:2px solid #00FF00; border-radius:8px;
+    color:#fff; font:bold 20px 'Courier New',monospace;
+    z-index:50; cursor:pointer; }
+#btnFs:active { background:rgba(0,255,0,0.9); }
+#dpad { position:fixed; bottom:20px; left:20px; display:none; z-index:50; }
+#dpad .row { display:flex; gap:6px; justify-content:center; margin-bottom:6px; }
+#dpad button { width:60px; height:60px;
+    background:rgba(0,255,0,0.4); border:2px solid #00FF00;
+    border-radius:12px; color:#fff; font:bold 22px 'Courier New',monospace;
+    touch-action:none; cursor:pointer; }
+#dpad button:active { background:rgba(0,255,0,0.9); }
+#actions { position:fixed; bottom:20px; right:20px; display:none; z-index:50; }
+#actions button { width:64px; height:64px; margin:4px;
+    background:rgba(255,165,0,0.4); border:2px solid #FFA500;
+    border-radius:12px; color:#fff; font:bold 14px 'Courier New',monospace;
+    touch-action:none; cursor:pointer; }
+#actions button:active { background:rgba(255,165,0,0.9); }
+#blocks { position:fixed; top:10px; left:10px; display:none; z-index:50; }
+#blocks button { width:44px; height:44px; margin:2px;
+    background:rgba(0,0,255,0.4); border:2px solid #0000FF;
+    border-radius:8px; color:#fff; font:bold 16px 'Courier New',monospace;
+    touch-action:none; cursor:pointer; }
+#blocks button.active { background:rgba(0,0,255,0.9); }
+@media (max-width:500px) {
+    #dpad button { width:52px; height:52px; font-size:18px; }
+    #actions button { width:56px; height:56px; font-size:12px; }
+}
+</style>
+</head>
+<body>
+
+<div id="wrap">
+    <canvas id="game" width="640" height="480"></canvas>
+</div>
+
+<button id="btnFs">⛶</button>
+<button id="start">▶ START</button>
+
+<div id="dpad">
+    <div class="row"><button id="bU">▲</button></div>
+    <div class="row">
+        <button id="bL">◄</button>
+        <button id="bD">▼</button>
+        <button id="bR">►</button>
+    </div>
+</div>
+
+<div id="actions">
+    <button id="bAtk">ATK</button>
+    <button id="bBrk">BRK</button>
+    <button id="bBld">BLD</button>
+    <button id="bSpn">SPN</button>
+</div>
+
+<div id="blocks">
+    <button id="bB1" class="active">1</button>
+    <button id="bB2">2</button>
+    <button id="bB3">3</button>
+    <button id="bMode">F1</button>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+// ================================================================
+// КОНСТАНТЫ
+// ================================================================
+var SW = 320, SH = 240;
+var WW = 640, WH = 480;
+var FP_SHIFT = 12;
+var FP_ONE = 1 << FP_SHIFT;
+
+// ================================================================
+// КАНВАС
+// ================================================================
+var canvas = document.getElementById('game');
+var ctx = canvas.getContext('2d');
+canvas.width = WW; canvas.height = WH;
+ctx.imageSmoothingEnabled = false;
+
+var bb = document.createElement('canvas');
+bb.width = SW; bb.height = SH;
+var bctx = bb.getContext('2d');
+var imgData = bctx.createImageData(SW, SH);
+var pixels = new Uint32Array(imgData.data.buffer);
+
+// ================================================================
+// АДАПТАЦИЯ ПОД ЭКРАН
+// ================================================================
+function fixCanvasSize() {
+    var w = window.innerWidth, h = window.innerHeight;
+    var gameAspect = WW / WH;
+    var screenAspect = w / h;
+    var cw, ch;
+    if (screenAspect > gameAspect) { ch = h; cw = Math.floor(h * gameAspect); }
+    else { cw = w; ch = Math.floor(w / gameAspect); }
+    canvas.style.width = cw + 'px';
+    canvas.style.height = ch + 'px';
+}
+fixCanvasSize();
+window.addEventListener('resize', fixCanvasSize);
+window.addEventListener('orientationchange', function(){ setTimeout(fixCanvasSize, 200); });
+
+// ================================================================
+// ИГРОВОЕ СОСТОЯНИЕ
+// ================================================================
+var playerX = 3 * FP_ONE + (FP_ONE / 2);
+var playerY = 3 * FP_ONE + (FP_ONE / 2);
+var playerAngle = 0;
+var playerHP = 10;
+var scoreFlags = 0;
+var diamondsCollected = 0;
+var isDead = false;
+
+var isAttacking = false;
+var attackFrame = 0;
+
+var gameMode = 0; // 0 = Survival, 1 = Creative
+var selectedBlockType = 1;
+var inventory = [0, 5, 5, 5];
+
+// ================================================================
+// КАРТА (32×14)
+// ================================================================
+var map = [
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,1,1,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,1,0,0,0,2,2,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,1,0,0,0,2,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,1,1,4,1,1,1,1,1,0,0,0,2,0,3,3,3,0,2,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,2,0,3,0,3,0,2,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,4,0,3,3,3,0,4,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,2,2,2,4,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+var MW = 32, MH = 14;
+
+// ================================================================
+// ТАБЛИЦЫ
+// ================================================================
+var sinT = new Int32Array(1024);
+var cosT = new Int32Array(1024);
+for (var i = 0; i < 1024; i++) {
+    var rad = (i * Math.PI) / 512.0;
+    sinT[i] = Math.floor(Math.sin(rad) * FP_ONE);
+    cosT[i] = Math.floor(Math.cos(rad) * FP_ONE);
+}
+
+// ================================================================
+// Z-БУФЕР
+// ================================================================
+var zBuf = new Int32Array(SW);
+
+// ================================================================
+// ТЕКСТУРЫ
+// ================================================================
+var WTS = 16;   // wall texture size
+var MTS = 64;   // mob texture size
+var HTS = 16;   // heart texture size
+
+var tex = {
+    cobblestone: null, dirt: null, planks: null,
+    creeper: null, zombie: null, sword: null, heart: null,
+    door: null, diamond: null
+};
+var texCache = {};
+
+function loadImg(src) {
+    return new Promise(function(resolve, reject){
+        var img = new Image();
+        img.onload = function(){ resolve(img); };
+        img.onerror = function(){ resolve(null); };
+        img.src = src;
+    });
+}
+
+function getPix(img, x, y) {
+    if (!img) return 0xFF000000;
+    var key = img.src;
+    if (!texCache[key]) {
+        var c = document.createElement('canvas');
+        c.width = img.width; c.height = img.height;
+        var cx = c.getContext('2d');
+        cx.drawImage(img, 0, 0);
+        texCache[key] = cx.getImageData(0, 0, img.width, img.height);
+    }
+    var d = texCache[key].data;
+    var idx = (y * img.width + x) * 4;
+    var r = d[idx], g = d[idx+1], b = d[idx+2], a = d[idx+3];
+    return (a << 24) | (b << 16) | (g << 8) | r;
+}
+
+// ================================================================
+// МОБЫ И ПРЕДМЕТЫ
+// ================================================================
+var mobs = [];  // { X, Y, Type (1=creeper, 2=zombie), HP, IsAlive, Distance }
+var items = []; // { X, Y, Type, IsPickedUp, Distance }
+
+function addMob(x, y, type) {
+    mobs.push({ X: x, Y: y, Type: type,
+        HP: (type === 1) ? 20 : 30,
+        IsAlive: true, Distance: 0 });
+}
+function addItem(x, y, type) {
+    items.push({ X: x, Y: y, Type: type,
+        IsPickedUp: false, Distance: 0 });
+}
+
+// Стартовые мобы и предметы
+addMob(14 * FP_ONE, 4 * FP_ONE, 1);
+addMob(20 * FP_ONE, 3 * FP_ONE, 2);
+addItem(5 * FP_ONE, 2 * FP_ONE, 1);
+addItem(15 * FP_ONE, 9 * FP_ONE, 1);
+
+// ================================================================
+// УПРАВЛЕНИЕ
+// ================================================================
+var input = {
+    forward: false, backward: false, turnLeft: false, turnRight: false
+};
+
+var damageCooldown = 0;
+
+// ================================================================
+// МУЗЫКА
+// ================================================================
+var bgMusic = null;
+function initMusic() {
+    bgMusic = new Audio('music_loop.wav');
+    bgMusic.loop = true;
+    bgMusic.volume = 0.5;
+}
+
+// ================================================================
+// ИГРОВОЙ ЦИКЛ
+// ================================================================
+function updatePlayer() {
+    var moveSpeed = Math.floor(FP_ONE / 8);
+    var turnSpeed = 16;
+
+    if (input.turnLeft)  playerAngle = (playerAngle - turnSpeed + 1024) % 1024;
+    if (input.turnRight) playerAngle = (playerAngle + turnSpeed) % 1024;
+
+    var dx = (cosT[playerAngle] * moveSpeed) >> FP_SHIFT;
+    var dy = (sinT[playerAngle] * moveSpeed) >> FP_SHIFT;
+
+    if (input.forward) {
+        if (map[playerY >> FP_SHIFT][(playerX + dx) >> FP_SHIFT] === 0) playerX += dx;
+        if (map[(playerY + dy) >> FP_SHIFT][playerX >> FP_SHIFT] === 0) playerY += dy;
+    }
+    if (input.backward) {
+        if (map[playerY >> FP_SHIFT][(playerX - dx) >> FP_SHIFT] === 0) playerX -= dx;
+        if (map[(playerY - dy) >> FP_SHIFT][playerX >> FP_SHIFT] === 0) playerY -= dy;
+    }
+
+    if (isAttacking) {
+        attackFrame++;
+        if (attackFrame > 4) { isAttacking = false; attackFrame = 0; }
+    }
+}
+
+function updateMobsAndCombat() {
+    if (gameMode === 1) return;
+
+    var mobSpeed = Math.floor(FP_ONE / 32);
+    if (damageCooldown > 0) damageCooldown--;
+
+    for (var i = 0; i < mobs.length; i++) {
+        var mob = mobs[i];
+        if (!mob.IsAlive) continue;
+        var dx = playerX - mob.X;
+        var dy = playerY - mob.Y;
+        mob.Distance = Math.abs(dx) + Math.abs(dy);
+
+        if (mob.Distance < 10 * FP_ONE && mob.Distance > FP_ONE / 2) {
+            var stepX = (dx > 0) ? mobSpeed : -mobSpeed;
+            var stepY = (dy > 0) ? mobSpeed : -mobSpeed;
+            if (map[mob.Y >> FP_SHIFT][(mob.X + stepX) >> FP_SHIFT] === 0) mob.X += stepX;
+            if (map[(mob.Y + stepY) >> FP_SHIFT][mob.X >> FP_SHIFT] === 0) mob.Y += stepY;
+        }
+
+        if (mob.Distance <= FP_ONE / 2 && damageCooldown === 0) {
+            playerHP--; damageCooldown = 15;
+            if (playerHP <= 0) isDead = true;
+        }
+    }
+}
+
+function updateItems() {
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        if (item.IsPickedUp) continue;
+        item.Distance = Math.abs(playerX - item.X) + Math.abs(playerY - item.Y);
+        if (item.Distance < FP_ONE / 2) {
+            item.IsPickedUp = true;
+            if (item.Type === 1) diamondsCollected++;
+        }
+    }
+}
+
+function performPlayerAttack() {
+    if (isAttacking) return;
+    isAttacking = true; attackFrame = 0;
+    for (var i = 0; i < mobs.length; i++) {
+        var mob = mobs[i];
+        if (!mob.IsAlive || mob.Distance > FP_ONE * 2) continue;
+        var mobAngle = Math.atan2(mob.Y - playerY, mob.X - playerX) * 512.0 / Math.PI;
+        if (mobAngle < 0) mobAngle += 1024;
+        var angleDiff = Math.abs(playerAngle - mobAngle);
+        if (angleDiff > 512) angleDiff = 1024 - angleDiff;
+        if (angleDiff < 100) {
+            mob.HP -= 10;
+            if (mob.HP <= 0) { mob.IsAlive = false; scoreFlags++; }
+            break;
+        }
+    }
+}
+
+function breakBlockAhead() {
+    var checkX = playerX, checkY = playerY;
+    var sinR = sinT[playerAngle], cosR = cosT[playerAngle];
+    var step = Math.floor(FP_ONE / 16);
+
+    for (var i = 0; i < 48; i++) {
+        checkX += (cosR * step) >> FP_SHIFT;
+        checkY += (sinR * step) >> FP_SHIFT;
+        var mx = checkX >> FP_SHIFT;
+        var my = checkY >> FP_SHIFT;
+
+        if (mx < 0 || mx >= MW || my < 0 || my >= MH) break;
+        if (map[my][mx] > 0) {
+            if (mx === 0 || mx === MW - 1 || my === 0 || my === MH - 1) break;
+            var droppedType = map[my][mx];
+            map[my][mx] = 0;
+            if (gameMode === 0 && droppedType >= 1 && droppedType <= 3) {
+                inventory[droppedType]++;
+            }
+            break;
+        }
+    }
+}
+
+function buildBlockAhead(blockType) {
+    if (gameMode === 0 && inventory[blockType] <= 0) return;
+
+    var checkX = playerX, checkY = playerY;
+    var sinR = sinT[playerAngle], cosR = cosT[playerAngle];
+    var step = Math.floor(FP_ONE / 16);
+
+    var lastEmptyX = playerX >> FP_SHIFT;
+    var lastEmptyY = playerY >> FP_SHIFT;
+
+    for (var i = 0; i < 48; i++) {
+        checkX += (cosR * step) >> FP_SHIFT;
+        checkY += (sinR * step) >> FP_SHIFT;
+        var mx = checkX >> FP_SHIFT;
+        var my = checkY >> FP_SHIFT;
+
+        if (mx < 0 || mx >= MW || my < 0 || my >= MH) break;
+        if (map[my][mx] > 0) {
+            var pCheckX = playerX >> FP_SHIFT;
+            var pCheckY = playerY >> FP_SHIFT;
+            if (lastEmptyX === pCheckX && lastEmptyY === pCheckY) break;
+
+            map[lastEmptyY][lastEmptyX] = blockType;
+            if (gameMode === 0) inventory[blockType]--;
+            break;
+        }
+        lastEmptyX = mx; lastEmptyY = my;
+    }
+}
+
+function spawnMobInFront() {
+    var spawnX = playerX + ((cosT[playerAngle] * FP_ONE * 2) >> FP_SHIFT);
+    var spawnY = playerY + ((sinT[playerAngle] * FP_ONE * 2) >> FP_SHIFT);
+    var type = (Math.random() < 0.5) ? 1 : 2;
+    addMob(spawnX, spawnY, type);
+}
+
+// ================================================================
+// РЕНДЕР
+// ================================================================
+function renderRaycast() {
+    // Небо и пол
+    var sky = 0xFF7FBF7F | 0xFF000000; // RGB(127,191,255) BGRA
+    var skyBGR = 0xFF00BF7F | 0xFF000000; // пересчитываем
+    // Правильно: ABGR = 0xAABBGGRR
+    // RGB(127,191,255) = 0xFFBFFF7F (ABGR)
+    sky = 0xFFBFFF7F | 0; // A=FF, B=FF, G=BF, R=7F
+    var floorColor = 0xFF467A55 | 0; // RGB(85,122,70) = BGR(70,122,85)
+    // floor: A=FF, B=46, G=7A, R=55
+
+    var skyC = (0xFF << 24) | (255 << 16) | (191 << 8) | 127;   // ABGR: B=255, G=191, R=127
+    var floorC = (0xFF << 24) | (70 << 16) | (122 << 8) | 85;   // ABGR: B=70, G=122, R=85
+
+    for (var i = 0; i < pixels.length; i++) {
+        pixels[i] = (i < pixels.length / 2) ? skyC : floorC;
+    }
+
+    var fov = 170;
+    var startAngle = (playerAngle - Math.floor(fov / 2) + 1024) % 1024;
+
+    for (var x = 0; x < SW; x++) {
+        var rayAngle = (startAngle + Math.floor(x * fov / SW)) % 1024;
+        var sinR = sinT[rayAngle];
+        var cosR = cosT[rayAngle];
+        var distance = 0, hitWall = 0;
+        var curX = playerX, curY = playerY;
+        var step = Math.floor(FP_ONE / 16);
+
+        while (distance < 24 * FP_ONE) {
+            curX += (cosR * step) >> FP_SHIFT;
+            curY += (sinR * step) >> FP_SHIFT;
+            distance += step;
+            var testX = curX >> FP_SHIFT;
+            var testY = curY >> FP_SHIFT;
+            if (testX < 0 || testX >= MW || testY < 0 || testY >= MH) break;
+            if (map[testY][testX] > 0) { hitWall = map[testY][testX]; break; }
+        }
+
+        var correctAngle = (rayAngle - playerAngle + 1024) % 1024;
+        distance = (distance * cosT[correctAngle]) >> FP_SHIFT;
+        if (distance < FP_ONE / 4) distance = FP_ONE / 4;
+        zBuf[x] = distance;
+
+        if (hitWall === 0) continue;
+
+        var wallHeight = Math.floor((FP_ONE * SH) / distance);
+        var drawStart = Math.floor(-wallHeight / 2 + SH / 2);
+        var drawEnd = Math.floor(wallHeight / 2 + SH / 2);
+        if (drawStart < 0) drawStart = 0;
+        if (drawEnd >= SH) drawEnd = SH - 1;
+
+        // Координата X текстуры
+        var cellX = curX >> FP_SHIFT;
+        var cellY = curY >> FP_SHIFT;
+        var fracX = curX - (cellX << FP_SHIFT);
+        var fracY = curY - (cellY << FP_SHIFT);
+        var wallHit = (fracX < fracY) ? fracX : fracY;
+        var texX = Math.floor((wallHit * WTS) / FP_ONE) & (WTS - 1);
+
+        // Выбор текстуры
+        var img = tex.cobblestone;
+        if (hitWall === 2) img = tex.dirt;
+        else if (hitWall === 3) img = tex.planks;
+        else if (hitWall === 4) img = tex.door;
+
+        var texStep = Math.floor((WTS << 16) / wallHeight);
+        var texPos = (drawStart - SH / 2 + wallHeight / 2) * texStep;
+        var dark = distance > 6 * FP_ONE;
+
+        for (var y = drawStart; y < drawEnd; y++) {
+            var texY = (texPos >> 16) & (WTS - 1);
+            texPos += texStep;
+            var col;
+            if (img) col = getPix(img, texX, texY);
+            else col = 0xFF808080 | 0; // серый fallback
+            if (col === 0) col = 0xFF808080 | 0;
+            // Прозрачность — fallback
+            if (((col >> 24) & 0xFF) < 128) col = 0xFF808080 | 0;
+            if (dark) {
+                var r = (col >> 16) & 0xFF, g = (col >> 8) & 0xFF, b = col & 0xFF;
+                col = (0xFF << 24) | ((r >> 1) << 16) | ((g >> 1) << 8) | (b >> 1);
+            }
+            pixels[x + y * SW] = col >>> 0;
+        }
+    }
+}
+
+function renderSprites() {
+    var maxCount = mobs.length + items.length;
+    var arr = [];
+    for (var i = 0; i < mobs.length; i++) {
+        var mob = mobs[i];
+        if (!mob.IsAlive) continue;
+        var tY = (sinT[playerAngle] * (mob.Y - playerY) + cosT[playerAngle] * (mob.X - playerX)) >> FP_SHIFT;
+        if (tY > FP_ONE / 4) {
+            arr.push({ X: mob.X, Y: mob.Y, TY: tY, Tex: (mob.Type === 1) ? 'creeper' : 'zombie', IsItem: false, Ref: mob });
+        }
+    }
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        if (item.IsPickedUp) continue;
+        var tY = (sinT[playerAngle] * (item.Y - playerY) + cosT[playerAngle] * (item.X - playerX)) >> FP_SHIFT;
+        if (tY > FP_ONE / 4) {
+            arr.push({ X: item.X, Y: item.Y, TY: tY, Tex: 'diamond', IsItem: true, Ref: item });
+        }
+    }
+    arr.sort(function(a, b) { return b.TY - a.TY; });
+
+    for (var i = 0; i < arr.length; i++) {
+        var s = arr[i];
+        var sprX = s.X - playerX;
+        var sprY = s.Y - playerY;
+        var transformX = (cosT[playerAngle] * sprY - sinT[playerAngle] * sprX) >> FP_SHIFT;
+        var transformY = s.TY;
+        var sprScreenX = Math.floor(SW / 2) + Math.floor((transformX * SW) / transformY);
+        var sprHeight = Math.abs(Math.floor((FP_ONE * SH) / transformY));
+        if (s.IsItem) sprHeight = Math.floor(sprHeight * 0.6);
+
+        var drawStartY = Math.floor(-sprHeight / 2 + SH / 2);
+        if (s.IsItem) drawStartY += Math.floor((Math.abs(Math.floor((FP_ONE * SH) / transformY)) - sprHeight) / 2);
+        var drawEndY = drawStartY + sprHeight;
+
+        if (drawStartY < 0) drawStartY = 0;
+        if (drawEndY >= SH) drawEndY = SH - 1;
+
+        var sprWidth = sprHeight;
+        var drawStartX = Math.floor(-sprWidth / 2 + sprScreenX);
+        var drawEndX = Math.floor(sprWidth / 2 + sprScreenX);
+        if (drawStartX < 0) drawStartX = 0;
+        if (drawEndX >= SW) drawEndX = SW - 1;
+
+        var img = tex[s.Tex];
+        var dark = transformY > 6 * FP_ONE;
+
+        for (var stripe = drawStartX; stripe < drawEndX; stripe++) {
+            var tXs = Math.floor(((stripe - (-sprWidth / 2 + sprScreenX)) * MTS) / sprWidth);
+            if (tXs < 0 || tXs >= MTS) continue;
+            if (transformY < zBuf[stripe]) {
+                for (var y = drawStartY; y < drawEndY; y++) {
+                    var tYs = Math.floor(((y - drawStartY) * MTS) / sprHeight);
+                    if (tYs < 0 || tYs >= MTS) continue;
+                    var col = img ? getPix(img, tXs, tYs) : 0xFFFF00FF;
+                    var a = (col >> 24) & 0xFF;
+                    if (a > 128) {
+                        if (!s.IsItem && isAttacking && attackFrame < 2 && transformY < FP_ONE * 2) {
+                            col = 0xFFFF0000 | 0; // красная вспышка
+                        } else if (dark) {
+                            var r = (col >> 16) & 0xFF, g = (col >> 8) & 0xFF, b = col & 0xFF;
+                            col = (0xFF << 24) | ((r >> 1) << 16) | ((g >> 1) << 8) | (b >> 1);
+                        }
+                        pixels[stripe + y * SW] = col >>> 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
+function renderWeapon() {
+    // Прицел
+    var centerX = Math.floor(SW / 2);
+    var centerY = Math.floor(SH / 2);
+    pixels[centerX + centerY * SW] = 0xFFFFFFFF | 0;
+
+    // Меч
+    var img = tex.sword;
+    var swordSize = 72;
+    var weaponStartX = SW - swordSize + 5 - (isAttacking ? (attackFrame * 10) : 0);
+    var weaponStartY = SH - swordSize - 5 + (isAttacking ? (attackFrame * 6) : 0);
+
+    for (var sx = 0; sx < swordSize; sx++) {
+        var px = weaponStartX + sx;
+        if (px < 0 || px >= SW) continue;
+        for (var sy = 0; sy < swordSize; sy++) {
+            var py = weaponStartY + sy;
+            if (py < 0 || py >= SH) continue;
+            var tXs = Math.floor((sx * MTS) / swordSize);
+            var tYs = Math.floor((sy * MTS) / swordSize);
+            var col = img ? getPix(img, tXs, tYs) : 0xFF00FFFF;
+            var a = (col >> 24) & 0xFF;
+            if (a > 128) {
+                pixels[px + py * SW] = col >>> 0;
+            }
+        }
+    }
+
+    // Сердца
+    if (gameMode === 0) {
+        var heartImg = tex.heart;
+        var heartSize = 12;
+        var hudY = SH - 18;
+        for (var h = 0; h < playerHP; h++) {
+            var hudX = 8 + h * 14;
+            for (var hx = 0; hx < heartSize; hx++) {
+                for (var hy = 0; hy < heartSize; hy++) {
+                    var tXs = Math.floor((hx * HTS) / heartSize);
+                    var tYs = Math.floor((hy * HTS) / heartSize);
+                    var col = heartImg ? getPix(heartImg, tXs, tYs) : 0xFFFF0000;
+                    var a = (col >> 24) & 0xFF;
+                    if (a > 128) {
+                        var px2 = hudX + hx;
+                        var py2 = hudY + hy;
+                        if (px2 >= 0 && px2 < SW && py2 >= 0 && py2 < SH) {
+                            pixels[px2 + py2 * SW] = col >>> 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ================================================================
+// HUD (текст)
+// ================================================================
+function drawHUD() {
+    // Наносим на canvas поверх bb
+    ctx.drawImage(bb, 0, 0, WW, WH);
+
+    ctx.font = 'bold 14px "Courier New"';
+    var modeText = (gameMode === 0) ? 'SURVIVAL MODE' : 'CREATIVE MODE';
+    ctx.fillStyle = (gameMode === 0) ? '#FF6347' : '#00FF00';
+    ctx.fillText(modeText, 20, 30);
+
+    var blockName = (selectedBlockType === 1) ? 'Cobblestone'
+                  : (selectedBlockType === 2) ? 'Dirt' : 'Planks';
+    var countText = (gameMode === 1) ? '∞' : inventory[selectedBlockType].toString();
+    ctx.fillStyle = '#FFF';
+    ctx.fillText('BLOCK: ' + blockName + ' (' + countText + ')', 20, 55);
+
+    ctx.fillStyle = '#00FFFF';
+    ctx.fillText('DIAMONDS: ' + diamondsCollected, 20, 80);
+
+    ctx.font = '12px "Courier New"';
+    ctx.fillStyle = '#FFFF00';
+    var helpText = '[F1] Mode  [1-3] Block  [Q] Break  [F] Build  [Space] Attack';
+    if (gameMode === 1) helpText += '  [G] Spawn';
+    ctx.fillText(helpText, 20, WH - 20);
+
+    if (isDead) {
+        ctx.font = 'bold 24px "Courier New"';
+        ctx.fillStyle = '#FF0000';
+        ctx.fillText('GAME OVER', WW / 2 - 80, WH / 2);
+    }
+}
+
+// ================================================================
+// ГЛАВНЫЙ ЦИКЛ
+// ================================================================
+function loop() {
+    if (!isDead) {
+        updatePlayer();
+        updateMobsAndCombat();
+        updateItems();
+        renderRaycast();
+        renderSprites();
+        renderWeapon();
+    } else {
+        for (var i = 0; i < pixels.length; i++) pixels[i] = 0xFF0000AA | 0;
+    }
+    bctx.putImageData(imgData, 0, 0);
+    drawHUD();
+    requestAnimationFrame(loop);
+}
+
+// ================================================================
+// КЛАВИАТУРА
+// ================================================================
+document.addEventListener('keydown', function(e) {
+    var k = e.key.toLowerCase();
+    if (k === 'w' || k === 'arrowup') input.forward = true;
+    if (k === 's' || k === 'arrowdown') input.backward = true;
+    if (k === 'a' || k === 'arrowleft') input.turnLeft = true;
+    if (k === 'd' || k === 'arrowright') input.turnRight = true;
+    if (k === ' ' || k === 'enter') performPlayerAttack();
+    if (k === 'q') breakBlockAhead();
+    if (k === 'f') buildBlockAhead(selectedBlockType);
+    if (k === 'g' && gameMode === 1) spawnMobInFront();
+    if (k === '1') { selectedBlockType = 1; updateBlockButtons(); }
+    if (k === '2') { selectedBlockType = 2; updateBlockButtons(); }
+    if (k === '3') { selectedBlockType = 3; updateBlockButtons(); }
+    if (e.key === 'F1') {
+        e.preventDefault();
+        gameMode = (gameMode === 0) ? 1 : 0;
+        if (gameMode === 1) { isDead = false; playerHP = 10; }
+    }
+});
+document.addEventListener('keyup', function(e) {
+    var k = e.key.toLowerCase();
+    if (k === 'w' || k === 'arrowup') input.forward = false;
+    if (k === 's' || k === 'arrowdown') input.backward = false;
+    if (k === 'a' || k === 'arrowleft') input.turnLeft = false;
+    if (k === 'd' || k === 'arrowright') input.turnRight = false;
+});
+
+// ================================================================
+// ТАЧ-КНОПКИ
+// ================================================================
+function bindHold(id, fn) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('touchstart', function(e){ e.preventDefault(); fn(true); });
+    el.addEventListener('touchend', function(e){ e.preventDefault(); fn(false); });
+    el.addEventListener('touchcancel', function(e){ e.preventDefault(); fn(false); });
+    el.addEventListener('mousedown', function(){ fn(true); });
+    el.addEventListener('mouseup', function(){ fn(false); });
+    el.addEventListener('mouseleave', function(){ fn(false); });
+}
+
+bindHold('bU', function(v){ input.forward = v; });
+bindHold('bD', function(v){ input.backward = v; });
+bindHold('bL', function(v){ input.turnLeft = v; });
+bindHold('bR', function(v){ input.turnRight = v; });
+
+function bindTap(id, fn) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('touchstart', function(e){ e.preventDefault(); fn(); });
+    el.addEventListener('click', function(){ fn(); });
+}
+bindTap('bAtk', function(){ performPlayerAttack(); });
+bindTap('bBrk', function(){ breakBlockAhead(); });
+bindTap('bBld', function(){ buildBlockAhead(selectedBlockType); });
+bindTap('bSpn', function(){ if (gameMode === 1) spawnMobInFront(); });
+bindTap('bB1', function(){ selectedBlockType = 1; updateBlockButtons(); });
+bindTap('bB2', function(){ selectedBlockType = 2; updateBlockButtons(); });
+bindTap('bB3', function(){ selectedBlockType = 3; updateBlockButtons(); });
+bindTap('bMode', function(){
+    gameMode = (gameMode === 0) ? 1 : 0;
+    if (gameMode === 1) { isDead = false; playerHP = 10; }
+});
+
+function updateBlockButtons() {
+    document.getElementById('bB1').classList.toggle('active', selectedBlockType === 1);
+    document.getElementById('bB2').classList.toggle('active', selectedBlockType === 2);
+    document.getElementById('bB3').classList.toggle('active', selectedBlockType === 3);
+}
+
+// ================================================================
+// ПОКАЗ/СКРЫТИЕ ТАЧ-КНОПОК
+// ================================================================
+function updateTouchControls() {
+    var isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+    if (!isTouch) return;
+    document.getElementById('dpad').style.display = 'block';
+    document.getElementById('actions').style.display = 'block';
+    document.getElementById('blocks').style.display = 'block';
+}
+
+// ================================================================
+// FULLSCREEN
+// ================================================================
+document.getElementById('btnFs').addEventListener('click', function() {
+    if (!document.fullscreenElement) {
+        var el = document.documentElement;
+        if (el.requestFullscreen) el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+        else if (el.msRequestFullscreen) el.msRequestFullscreen();
+    } else {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        else if (document.msExitFullscreen) document.msExitFullscreen();
+    }
+});
+
+// ================================================================
+// ЗАПУСК
+// ================================================================
+Promise.all([
+    loadImg('cobblestone.png'),
+    loadImg('dirt.png'),
+    loadImg('planks.png'),
+    loadImg('creeper.png'),
+    loadImg('zombie.png'),
+    loadImg('sword.png'),
+    loadImg('heart.png'),
+    loadImg('door.png'),
+    loadImg('diamond.png')
+]).then(function(imgs) {
+    tex.cobblestone = imgs[0];
+    tex.dirt = imgs[1];
+    tex.planks = imgs[2];
+    tex.creeper = imgs[3];
+    tex.zombie = imgs[4];
+    tex.sword = imgs[5];
+    tex.heart = imgs[6];
+    tex.door = imgs[7];
+    tex.diamond = imgs[8];
+
+    initMusic();
+    updateTouchControls();
+
+    document.getElementById('start').addEventListener('click', function() {
+        document.getElementById('start').style.display = 'none';
+        if (bgMusic) { bgMusic.play().catch(function(){}); }
+        loop();
+    });
+});
+
+})();
+</script>
+</body>
+</html>
